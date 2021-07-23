@@ -16,7 +16,7 @@ use crate::{
   runtime::{
     webview::{CustomProtocol, WebviewAttributes, WindowBuilder},
     window::{PendingWindow, WindowEvent},
-    Dispatch, RunEvent, Runtime,
+    Dispatch, RunEvent, RunMode, Runtime,
   },
   sealed::{ManagerBase, RuntimeOrDispatch},
   Context, Invoke, InvokeError, Manager, StateManager, Window,
@@ -204,6 +204,7 @@ pub struct App<R: Runtime> {
   #[cfg(feature = "system-tray")]
   tray_handle: Option<tray::SystemTrayHandle<R>>,
   handle: AppHandle<R>,
+  run_mode: RunMode,
 }
 
 impl<R: Runtime> Manager<R> for App<R> {}
@@ -301,36 +302,40 @@ impl<R: Runtime> App<R> {
   pub fn run<F: Fn(&AppHandle<R>, Event) + 'static>(mut self, callback: F) {
     let app_handle = self.handle();
     let manager = self.manager.clone();
-    self.runtime.take().unwrap().run(move |event| match event {
-      RunEvent::Exit => {
-        #[cfg(shell_execute)]
-        {
-          crate::api::process::kill_children();
+    self
+      .runtime
+      .take()
+      .unwrap()
+      .run(self.run_mode, move |event| match event {
+        RunEvent::Exit => {
+          #[cfg(shell_execute)]
+          {
+            crate::api::process::kill_children();
+          }
+          #[cfg(all(windows, feature = "system-tray"))]
+          {
+            let _ = app_handle.remove_system_tray();
+          }
+          callback(&app_handle, Event::Exit);
         }
-        #[cfg(all(windows, feature = "system-tray"))]
-        {
-          let _ = app_handle.remove_system_tray();
-        }
-        callback(&app_handle, Event::Exit);
-      }
-      _ => {
-        on_event_loop_event(&event, &manager);
-        callback(
-          &app_handle,
-          match event {
-            RunEvent::Exit => Event::Exit,
-            RunEvent::CloseRequested { label, signal_tx } => Event::CloseRequested {
-              label: label.parse().unwrap_or_else(|_| unreachable!()),
-              api: CloseRequestApi(signal_tx),
+        _ => {
+          on_event_loop_event(&event, &manager);
+          callback(
+            &app_handle,
+            match event {
+              RunEvent::Exit => Event::Exit,
+              RunEvent::CloseRequested { label, signal_tx } => Event::CloseRequested {
+                label: label.parse().unwrap_or_else(|_| unreachable!()),
+                api: CloseRequestApi(signal_tx),
+              },
+              RunEvent::WindowClose(label) => {
+                Event::WindowClosed(label.parse().unwrap_or_else(|_| unreachable!()))
+              }
+              _ => unimplemented!(),
             },
-            RunEvent::WindowClose(label) => {
-              Event::WindowClosed(label.parse().unwrap_or_else(|_| unreachable!()))
-            }
-            _ => unimplemented!(),
-          },
-        );
-      }
-    });
+          );
+        }
+      });
   }
 
   /// Runs a iteration of the runtime event loop and immediately return.
@@ -359,7 +364,9 @@ impl<R: Runtime> App<R> {
       .runtime
       .as_mut()
       .unwrap()
-      .run_iteration(move |event| on_event_loop_event(&event, &manager))
+      .run_iteration(self.run_mode, move |event| {
+        on_event_loop_event(&event, &manager)
+      })
   }
 }
 
@@ -469,6 +476,9 @@ pub struct Builder<R: Runtime> {
   /// System tray event handlers.
   #[cfg(feature = "system-tray")]
   system_tray_event_listeners: Vec<SystemTrayEventListener<R>>,
+
+  /// The event loop run mode
+  run_mode: RunMode,
 }
 
 impl<R: Runtime> Builder<R> {
@@ -491,6 +501,7 @@ impl<R: Runtime> Builder<R> {
       system_tray: None,
       #[cfg(feature = "system-tray")]
       system_tray_event_listeners: Vec::new(),
+      run_mode: RunMode::QuitWhenAllWindowsClosed,
     }
   }
 
@@ -712,6 +723,12 @@ impl<R: Runtime> Builder<R> {
     self
   }
 
+  /// Sets the run mode for this application.
+  pub fn run_mode(mut self, run_mode: RunMode) -> Self {
+    self.run_mode = run_mode;
+    self
+  }
+
   /// Builds the application.
   #[allow(clippy::type_complexity)]
   pub fn build<A: Assets>(mut self, context: Context<A>) -> crate::Result<App<R>> {
@@ -784,6 +801,7 @@ impl<R: Runtime> Builder<R> {
       clipboard_manager: clipboard_manager.clone(),
       #[cfg(feature = "system-tray")]
       tray_handle: None,
+      run_mode: self.run_mode,
       handle: AppHandle {
         runtime_handle,
         manager,

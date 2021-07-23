@@ -154,6 +154,32 @@ impl Icon {
   }
 }
 
+/// How the app should run
+#[derive(Copy, Clone, PartialEq)]
+pub enum RunMode {
+  /// The application will quit after the last window is closed.
+  QuitWhenAllWindowsClosed,
+
+  /// The event loop will keep running, even if all windows are closed. It is up to
+  /// the individual developers to quit their app.
+  ///
+  /// This mode is mostly intended for background applications with a system tray icon that want
+  /// to keep running in the background after closing the window.
+  ///
+  /// ### Warning
+  /// When using indefinite mode, make sure to manually exit the application when appropriate.
+  /// Failure to terminate the process means it will stick around until the computer is shut down
+  /// or the process is stopped through the platform's activity monitor/task manager, as there will
+  /// be no way for the end user to close the application.
+  Indefinite,
+}
+
+impl Default for RunMode {
+  fn default() -> Self {
+    RunMode::QuitWhenAllWindowsClosed
+  }
+}
+
 /// Event triggered on the event loop run.
 #[non_exhaustive]
 pub enum RunEvent {
@@ -306,10 +332,14 @@ pub trait Runtime: Sized + 'static {
 
   /// Runs the one step of the webview runtime event loop and returns control flow to the caller.
   #[cfg(any(target_os = "windows", target_os = "macos"))]
-  fn run_iteration<F: Fn(RunEvent) + 'static>(&mut self, callback: F) -> RunIteration;
+  fn run_iteration<F: Fn(RunEvent) + 'static>(
+    &mut self,
+    run_mode: RunMode,
+    callback: F,
+  ) -> RunIteration;
 
   /// Run the webview runtime.
-  fn run<F: Fn(RunEvent) + 'static>(self, callback: F);
+  fn run<F: Fn(RunEvent) + 'static>(self, run_mode: RunMode, callback: F);
 }
 
 /// Webview dispatcher. A thread-safe handle to the webview API.

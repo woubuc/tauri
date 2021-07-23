@@ -14,7 +14,7 @@ use tauri_runtime::{
     DetachedWindow, PendingWindow, WindowEvent,
   },
   ClipboardManager, Dispatch, Error, GlobalShortcutManager, Icon, Result, RunEvent, RunIteration,
-  Runtime, RuntimeHandle, UserAttentionType,
+  RunMode, Runtime, RuntimeHandle, UserAttentionType,
 };
 
 #[cfg(feature = "menu")]
@@ -1390,7 +1390,11 @@ impl Runtime for Wry {
   }
 
   #[cfg(any(target_os = "windows", target_os = "macos"))]
-  fn run_iteration<F: Fn(RunEvent) + 'static>(&mut self, callback: F) -> RunIteration {
+  fn run_iteration<F: Fn(RunEvent) + 'static>(
+    &mut self,
+    run_mode: RunMode,
+    callback: F,
+  ) -> RunIteration {
     use wry::application::platform::run_return::EventLoopExtRunReturn;
     let webviews = self.webviews.clone();
     let window_event_listeners = self.window_event_listeners.clone();
@@ -1422,6 +1426,7 @@ impl Runtime for Wry {
             global_shortcut_manager: global_shortcut_manager.clone(),
             global_shortcut_manager_handle: &global_shortcut_manager_handle,
             clipboard_manager: clipboard_manager.clone(),
+            run_mode,
             #[cfg(feature = "menu")]
             menu_event_listeners: &menu_event_listeners,
             #[cfg(feature = "system-tray")]
@@ -1434,7 +1439,7 @@ impl Runtime for Wry {
     iteration
   }
 
-  fn run<F: Fn(RunEvent) + 'static>(self, callback: F) {
+  fn run<F: Fn(RunEvent) + 'static>(self, run_mode: RunMode, callback: F) {
     self.is_event_loop_running.store(true, Ordering::Relaxed);
     let webviews = self.webviews.clone();
     let window_event_listeners = self.window_event_listeners.clone();
@@ -1458,6 +1463,7 @@ impl Runtime for Wry {
           global_shortcut_manager: global_shortcut_manager.clone(),
           global_shortcut_manager_handle: &global_shortcut_manager_handle,
           clipboard_manager: clipboard_manager.clone(),
+          run_mode,
           #[cfg(feature = "menu")]
           menu_event_listeners: &menu_event_listeners,
           #[cfg(feature = "system-tray")]
@@ -1475,6 +1481,7 @@ struct EventLoopIterationContext<'a> {
   global_shortcut_manager: Arc<Mutex<WryShortcutManager>>,
   global_shortcut_manager_handle: &'a GlobalShortcutManagerHandle,
   clipboard_manager: Arc<Mutex<Clipboard>>,
+  run_mode: RunMode,
   #[cfg(feature = "menu")]
   menu_event_listeners: &'a MenuEventListeners,
   #[cfg(feature = "system-tray")]
@@ -1494,6 +1501,7 @@ fn handle_event_loop(
     global_shortcut_manager,
     global_shortcut_manager_handle,
     clipboard_manager,
+    run_mode,
     #[cfg(feature = "menu")]
     menu_event_listeners,
     #[cfg(feature = "system-tray")]
@@ -1595,6 +1603,7 @@ fn handle_event_loop(
                 window_id,
                 &mut webviews,
                 control_flow,
+                run_mode,
                 #[cfg(target_os = "linux")]
                 window_event_listeners,
                 #[cfg(feature = "menu")]
@@ -1698,6 +1707,7 @@ fn handle_event_loop(
                 id,
                 &mut webviews,
                 control_flow,
+                run_mode,
                 #[cfg(target_os = "linux")]
                 window_event_listeners,
                 #[cfg(feature = "menu")]
@@ -1870,6 +1880,7 @@ fn on_window_close<'a>(
   window_id: WindowId,
   webviews: &mut MutexGuard<'a, HashMap<WindowId, WebviewWrapper>>,
   control_flow: &mut ControlFlow,
+  run_mode: RunMode,
   #[cfg(target_os = "linux")] window_event_listeners: &WindowEventListeners,
   #[cfg(feature = "menu")] menu_event_listeners: MenuEventListeners,
 ) {
@@ -1878,7 +1889,7 @@ fn on_window_close<'a>(
     menu_event_listeners.lock().unwrap().remove(&window_id);
     callback(RunEvent::WindowClose(webview.label));
   }
-  if webviews.is_empty() {
+  if webviews.is_empty() && run_mode == RunMode::QuitWhenAllWindowsClosed {
     *control_flow = ControlFlow::Exit;
     callback(RunEvent::Exit);
   }
